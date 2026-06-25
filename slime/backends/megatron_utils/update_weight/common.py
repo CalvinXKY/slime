@@ -235,3 +235,26 @@ def _named_params_and_buffers_global(
                 layer_idx, rest = match.groups()
                 layer_idx = int(layer_idx) + layer_offset
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
+
+
+def get_sglang_tensor_parallel_size(args: Namespace, engine_gpu_count: int | None = None) -> int:
+    """Effective SGLang TP size for one engine (GPUs per engine // PP size)."""
+    gpu_count = args.rollout_num_gpus_per_engine if engine_gpu_count is None else engine_gpu_count
+    pp_size = getattr(args, "sglang_pp_size", 1) or getattr(args, "sglang_pipeline_parallel_size", 1)
+    if gpu_count % pp_size != 0:
+        raise ValueError(
+            f"engine GPU count ({gpu_count}) must be divisible by SGLang PP size ({pp_size})"
+        )
+    return gpu_count // pp_size
+
+
+def p2p_tp_sizes_match(args: Namespace, engine_gpu_counts: Sequence[int] | None = None) -> bool:
+    """
+    Return True when Megatron training TP equals SGLang inference TP for every engine.
+
+    P2P shard send/recv requires a 1:1 mapping between training and inference TP ranks.
+    """
+    megatron_tp = args.tensor_model_parallel_size
+    if engine_gpu_counts is None:
+        return megatron_tp == get_sglang_tensor_parallel_size(args)
+    return all(megatron_tp == get_sglang_tensor_parallel_size(args, c) for c in engine_gpu_counts)

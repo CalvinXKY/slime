@@ -36,6 +36,7 @@ from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_disk import UpdateWeightFromDisk
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
+from .update_weight.update_weight_from_distributed_p2p import UpdateWeightFromDistributedP2P
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
@@ -148,6 +149,24 @@ class MegatronTrainRayActor(TrainRayActor):
             from .update_weight.update_weight_from_distributed_delta import UpdateWeightFromDistributedDelta
 
             update_weight_cls = UpdateWeightFromDistributedDelta
+        elif getattr(self.args, "use_p2p_weight_update", False):
+            assert self.args.update_weight_mode == "full", "--use-p2p-weight-update requires --update-weight-mode=full"
+            from .update_weight.common import get_sglang_tensor_parallel_size, p2p_tp_sizes_match
+
+            if p2p_tp_sizes_match(self.args):
+                update_weight_cls = UpdateWeightFromDistributedP2P
+            else:
+                update_weight_cls = UpdateWeightFromDistributed
+                if (
+                    mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                    and mpu.get_tensor_model_parallel_rank() == 0
+                ):
+                    print(
+                        "[P2P] Megatron TP "
+                        f"({self.args.tensor_model_parallel_size}) != SGLang TP "
+                        f"({get_sglang_tensor_parallel_size(self.args)}); "
+                        "using NCCL broadcast weight update instead."
+                    )
         else:
             assert self.args.update_weight_mode == "full"
             if self.args.update_weight_transport == "disk":
